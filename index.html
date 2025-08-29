@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>随机美女图片 - 极致美学（修复版）</title>
+    <!-- NOTE: 将 typo 修正为 https:// -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link href="css/style.css" rel="stylesheet">
+</head>
+<body data-theme="dark">
+    <div class="particles" id="particles"></div>
+
+    <nav class="navbar">
+        <div class="logo">
+            <i class="fas fa-images"></i> RandomBeauty
+        </div>
+        <div class="nav-actions">
+            <div class="theme-toggle-btn" onclick="toggleTheme()" title="切换主题"></div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="hero-section">
+            <h1 class="hero-title">随机美女图片</h1>
+            <p class="hero-subtitle">发现每一刻的美好，感受视觉的极致体验</p>
+        </div>
+
+        <div class="main-content">
+            <div class="image-card">
+                <div class="image-container" id="imageContainer">
+                    <img id="randomImage" src="" alt="随机美女图片" style="display: none;">
+                    <div class="loading" id="loading">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <div>正在加载精美图片...</div>
+                    </div>
+
+                    <div class="image-overlay">
+                        <button class="overlay-btn" onclick="event.stopPropagation(); toggleFavorite()" title="收藏">
+                            <i id="favoriteIcon" class="far fa-heart"></i>
+                        </button>
+                        <button class="overlay-btn" onclick="event.stopPropagation(); showSharePanel()" title="分享">
+                            <i class="fas fa-share-alt"></i>
+                        </button>
+                        <button class="overlay-btn" onclick="event.stopPropagation(); openFullscreen()" title="全屏">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    <button class="btn" onclick="loadRandomImage()" id="loadBtn">
+                        <i class="fas fa-dice"></i>
+                        <span>换一张</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="downloadImage()" id="downloadBtn">
+                        <i class="fas fa-download"></i>
+                        <span>下载</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="toggleFavorite()" id="favoriteBtn">
+                        <i class="far fa-heart"></i>
+                        <span>收藏</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="showSharePanel()" id="shareBtn">
+                        <i class="fas fa-share-alt"></i>
+                        <span>分享</span>
+                    </button>
+                </div>
+
+                <div class="error-msg" id="errorMsg">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    图片加载失败，请检查网络连接或稍后重试
+                </div>
+            </div>
+
+            <div class="sidebar">
+                <div class="sidebar-card">
+                    <div class="sidebar-title">
+                        <i class="fas fa-chart-bar"></i>
+                        数据统计
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-number" id="viewCount">0</div>
+                            <div class="stat-label">浏览次数</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="favoriteCount">0</div>
+                            <div class="stat-label">收藏数量</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="downloadCount">0</div>
+                            <div class="stat-label">下载次数</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="shareCount">0</div>
+                            <div class="stat-label">分享次数</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-card">
+                    <div class="sidebar-title">
+                        <i class="fas fa-cog"></i>
+                        图片质量
+                    </div>
+                    <div class="quality-selector">
+                        <button class="quality-btn active" data-quality="original">原图</button>
+                        <button class="quality-btn" data-quality="high">高清</button>
+                        <button class="quality-btn" data-quality="medium">标准</button>
+                    </div>
+                </div>
+
+                <div class="sidebar-card">
+                    <div class="sidebar-title">
+                        <i class="fas fa-heart"></i>
+                        我的收藏
+                    </div>
+                    <div class="content-list" id="favoritesList">
+                        <div style="text-align: center; color: var(--text-muted); padding: 30px 20px;">
+                            <i class="far fa-heart" style="font-size: 24px; margin-bottom: 10px; display: block;"></i>
+                            暂无收藏
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-card">
+                    <div class="sidebar-title">
+                        <i class="fas fa-history"></i>
+                        浏览历史
+                    </div>
+                    <div class="content-list" id="historyList">
+                        <div style="text-align: center; color: var(--text-muted); padding: 30px 20px;">
+                            <i class="fas fa-history" style="font-size: 24px; margin-bottom: 10px; display: block;"></i>
+                            暂无历史
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-card">
+                    <div class="sidebar-title">
+                        <i class="fas fa-tools"></i>
+                        管理选项
+                    </div>
+                    <div class="management-options">
+                        <button class="btn-secondary small" onclick="clearHistory()">清空浏览历史</button>
+                        <button class="btn-secondary small" onclick="clearFavorites()">清空我的收藏</button>
+                        <button class="btn-secondary small" onclick="clearCache()">清空缓存图片</button>
+                        <button class="btn-secondary small" onclick="clearStats()">清空统计数据</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全屏覆盖（点击遮罩或关闭按钮或按 Esc 均可退出） -->
+    <div class="fullscreen-overlay" id="fullscreenOverlay" aria-hidden="true">
+        <div class="fullscreen-inner" id="fullscreenInner" role="dialog" aria-modal="true">
+            <img class="fullscreen-image" id="fullscreenImage" src="" alt="全屏图片">
+            <button class="fullscreen-close" id="fullscreenClose" aria-label="关闭全屏">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="share-panel" id="sharePanel" aria-hidden="true">
+        <h3 class="share-title">分享到</h3>
+        <div class="share-options">
+            <button class="share-btn weibo" onclick="shareToWeibo()">
+                <i class="fab fa-weibo"></i>
+                微博
+            </button>
+            <button class="share-btn weixin" onclick="shareToWeixin()">
+                <i class="fab fa-weixin"></i>
+                微信
+            </button>
+            <button class="share-btn qq" onclick="shareToQQ()">
+                <i class="fab fa-qq"></i>
+                QQ
+            </button>
+            <button class="share-btn link" onclick="copyLink()">
+                <i class="fas fa-link"></i>
+                复制链接
+            </button>
+        </div>
+        <button class="cancel-btn" onclick="hideSharePanel()">取消</button>
+    </div>
+
+    <script src="js/script.js"></script>
+</body>
+</html>
