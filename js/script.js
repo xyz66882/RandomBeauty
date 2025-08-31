@@ -1,9 +1,6 @@
-// js/script.js
-// 修复/增强版：使用 IndexedDB 持久缓存图片 Blob，保证刷新后仍显示同一张图片，收藏/历史/下载使用本地缓存。
-// 注意：现代浏览器支持 IndexedDB、fetch、Blob、navigator.clipboard 等 API。
+// js/script.js - 最终修复版 (利用 Image 对象和 Canvas 解决 403 问题)
 
-// NOTE: 将 typo 修正为 https://
-// 默认示例 API（需替换为可用接口）。可以使用之前的 API 地址替换此处常量。
+// 默认示例 API。
 const API_URL = 'https://api.jkyai.top/API/sjmtzs.php';
 
 // ----- IndexedDB 简单封装 -----
@@ -88,13 +85,13 @@ async function dbClearAllImages() {
 // ----- 状态与 DOM -----
 const state = {
     currentImageId: localStorage.getItem('lastImageId') || '',
-    currentImageUrl: '', // 原始请求 URL（仅作记录）
+    currentImageUrl: '', // 记录当前展示图片的原始API URL
     favorites: JSON.parse(localStorage.getItem('favorites') || '[]'),
     history: JSON.parse(localStorage.getItem('history') || '[]'),
     stats: JSON.parse(localStorage.getItem('stats') || '{"views":0,"downloads":0,"shares":0}'),
     theme: localStorage.getItem('theme') || 'dark',
-    quality: 'original',
-    loadingFetchAbortController: null
+    quality: localStorage.getItem('quality') || 'original',
+    // Removed loadingFetchAbortController as we are not using fetch directly for loading
 };
 
 const elements = {
@@ -128,6 +125,15 @@ function init() {
     setupQualitySelector();
     setupFullscreenHandlers();
 
+    // 初始化时激活当前质量按钮
+    document.querySelectorAll('.quality-btn').forEach(btn => {
+        if (btn.getAttribute('data-quality') === state.quality) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
     // 如果有 lastImageId，优先加载缓存显示
     if (state.currentImageId) {
         showLoading();
@@ -140,20 +146,21 @@ function init() {
                 updateStats('views', { incrementDirect: false });
                 updateFavoriteButton();
             } else {
-                loadRandomImage();
+                loadRandomImage(); // 缓存失效，加载新图片
             }
         }).catch(err => {
             console.error('读取缓存图片失败', err);
-            loadRandomImage();
+            loadRandomImage(); // 读取失败也加载新图片
         });
     } else {
-        loadRandomImage();
+        loadRandomImage(); // 首次加载或无历史图片时加载新图片
     }
 }
 
 // ----- 粒子背景 -----
 function createParticles() {
     const particlesContainer = document.getElementById('particles');
+    if (!particlesContainer) return;
     for (let i = 0; i < 20; i++) {
         const particle = document.createElement('div');
         particle.className = 'particle';
@@ -183,6 +190,7 @@ function hideLoading() {
 function showError() {
     elements.error.style.display = 'block';
     elements.image.style.display = 'none';
+    hideLoading();
 }
 
 function showNotification(message, iconClass) {
@@ -207,7 +215,7 @@ function showNotification(message, iconClass) {
 let currentObjectUrl = null;
 function displayImageObjectUrl(objUrl) {
     if (currentObjectUrl) {
-        try { URL.revokeObjectURL(currentObjectUrl); } catch (e) {}
+        try { URL.revokeObjectURL(currentObjectUrl); } catch (e) { /* silent error */ }
     }
     currentObjectUrl = objUrl;
     elements.image.src = objUrl;
@@ -219,160 +227,143 @@ function genId() {
     return 'img_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
 }
 
-// ----- 加载随机图片 -----
-let lastFetchUrl = null;
-async function loadRandomImage(force = false) {
-    if (state.loadingFetchAbortController) {
-        try { state.loadingFetchAbortController.abort(); } catch (e) {}
-        state.loadingFetchAbortController = null;
-    }
-
+// ----- 加载随机图片 (!!! 核心修改在此处 !!!) -----
+async function loadRandomImage() {
     showLoading();
     elements.error.style.display = 'none';
 
-    // 构造请求 URL（API 本身返回图片或图片链接）
     const requestUrl = API_URL + '?t=' + Date.now() + '&quality=' + encodeURIComponent(state.quality);
-    lastFetchUrl = requestUrl;
-
-    const controller = new AbortController();
-    state.loadingFetchAbortController = controller;
+    console.log("Attempting to load image via Image object from:", requestUrl); // Debug log
 
     try {
-        // 先请求 API（该 API 预期返回一个直接可用的图片 URL 或图片内容）
-        const resp = await fetch(requestUrl, { signal: controller.signal, cache: 'no-store' });
-        if (!resp.ok) throw new Error('网络响应错误: ' + resp.status);
+        const image = new Image();
+        image.crossOrigin = 'anonymous'; // 尝试设置 crossOrigin，尽可能避免 CORS 问题，并允许 canvas 读写
+        image.src = requestUrl;
 
-        // 兼容两种情况：API 直接返回图片二进制，或返回 JSON 包含图片 URL
-        const contentType = resp.headers.get('Content-Type') || '';
-        let blob;
-        let sourceUrl = requestUrl;
+        await new Promise((resolve, reject) => {
+            image.onload = () => {
+                resolve();
+            };
+            image.onerror = (e) => {
+                // Image.onerror event doesn't provide status codes, so we infer it's a network/server issue.
+                console.error('Image loading failed:', e);
+                reject(new Error('图片加载失败，可能是网络问题或服务器拒绝访问。'));
+            };
+        });
 
-        if (contentType.includes('application/json')) {
-            // 假设 JSON 中包含 { url: '...' } 或类似字段
-            const json = await resp.json();
-            const urlFromApi = json.url || json.data || json.image || json.img || json.src;
-            if (!urlFromApi) throw new Error('API 返回格式不包含图片 URL');
-            sourceUrl = urlFromApi;
-            const imgResp = await fetch(urlFromApi, { signal: controller.signal, cache: 'no-store' });
-            if (!imgResp.ok) throw new Error('图片下载失败: ' + imgResp.status);
-            blob = await imgResp.blob();
-        } else {
-            // API 直接返回图片二进制
-            blob = await resp.blob();
-            sourceUrl = requestUrl;
-        }
+        // 图片加载成功，将其绘制到 canvas 并获取 Blob
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0);
 
-        // 生成 id 并保存到 indexedDB
+        const blob = await new Promise((resolve, reject) => {
+            canvas.toBlob(b => {
+                if (b) {
+                    resolve(b);
+                } else {
+                    reject(new Error('无法从 Canvas 获取图片 Blob 数据。'));
+                }
+            }, 'image/jpeg'); // 可以指定图片格式，这里默认为 JPEG
+        });
+
         const id = genId();
         const record = {
             id,
             blob,
             timestamp: Date.now(),
-            sourceUrl
+            sourceUrl: requestUrl // 记录 API url 作为原始来源
         };
         await dbPutImage(record);
 
-        // 更新状态
         state.currentImageId = id;
-        state.currentImageUrl = sourceUrl;
+        state.currentImageUrl = requestUrl;
         localStorage.setItem('lastImageId', id);
 
-        // 显示图片（使用 object URL）
         const objUrl = URL.createObjectURL(blob);
         displayImageObjectUrl(objUrl);
 
         hideLoading();
-        addToHistory({ id, url: sourceUrl });
+        addToHistory({ id, url: requestUrl });
         updateStats('views');
         updateFavoriteButton();
-        state.loadingFetchAbortController = null;
+
     } catch (err) {
         console.error('加载图片失败', err);
         hideLoading();
         showError();
-        state.loadingFetchAbortController = null;
+        showNotification(`加载图片失败: ${err.message}`, 'fas fa-exclamation-triangle');
     }
 }
+
 
 // ----- 全屏（修复相关逻辑） -----
 let fullscreenImageObjectUrl = null;
 
 function setupFullscreenHandlers() {
-    // 点击遮罩（但不在图片区域）退出全屏
     elements.fullscreenOverlay.addEventListener('click', (e) => {
-        // 若点击在 inner 区域（包含图片与关闭按钮），忽略（允许内部按钮处理）
         if (!elements.fullscreenInner.contains(e.target)) {
             exitFullscreen();
         }
     });
 
-    // 关闭按钮
     elements.fullscreenClose.addEventListener('click', (e) => {
         e.stopPropagation();
         exitFullscreen();
     });
 
-    // 防止图片内的点击传播到遮罩（例如点击图片本身不退出）
     elements.fullscreenImage.addEventListener('click', (e) => {
         e.stopPropagation();
     });
 }
 
 function openFullscreen() {
-    // 这个函数与 enterFullscreen 名称保持兼容（页面上按钮绑定 openFullscreen）
     enterFullscreen();
 }
 
 function enterFullscreen() {
     if (!state.currentImageId) {
-        console.warn('No current image to fullscreen.');
+        showNotification('请先加载一张图片', 'fas fa-exclamation-triangle');
         return;
     }
 
     dbGetImage(state.currentImageId).then(rec => {
         if (!rec || !rec.blob) {
-            showNotification('无法进入全屏：图片未缓存', 'fas fa-exclamation-triangle');
+            showNotification('无法进入全屏：图片未缓存或已失效', 'fas fa-exclamation-triangle');
             return;
         }
 
-        // 清理之前的 objectURL（如果有）
         if (fullscreenImageObjectUrl) {
-            try { URL.revokeObjectURL(fullscreenImageObjectUrl); } catch (e) {}
+            try { URL.revokeObjectURL(fullscreenImageObjectUrl); } catch (e) { /* silent error */ }
             fullscreenImageObjectUrl = null;
         }
 
         fullscreenImageObjectUrl = URL.createObjectURL(rec.blob);
         elements.fullscreenImage.src = fullscreenImageObjectUrl;
 
-        // 显示 overlay（使用 flex）
         elements.fullscreenOverlay.style.display = 'flex';
         elements.fullscreenOverlay.setAttribute('aria-hidden', 'false');
 
-        // 禁止 body 滚动
         document.body.style.overflow = 'hidden';
 
-        // 绑定键盘事件
         document.addEventListener('keydown', handleFullscreenKeydown, { capture: true });
 
-        // focus to support keyboard
         elements.fullscreenClose.focus && elements.fullscreenClose.focus();
     }).catch(err => {
         console.error('enterFullscreen error', err);
+        showNotification('进入全屏失败', 'fas fa-exclamation-triangle');
     });
 }
 
 function exitFullscreen() {
-    // 隐藏 overlay
     elements.fullscreenOverlay.style.display = 'none';
     elements.fullscreenOverlay.setAttribute('aria-hidden', 'true');
 
-    // 恢复 body 滚动
     document.body.style.overflow = '';
 
-    // 移除键盘事件
     document.removeEventListener('keydown', handleFullscreenKeydown, { capture: true });
 
-    // 清理 objectURL
     try {
         if (fullscreenImageObjectUrl) {
             URL.revokeObjectURL(fullscreenImageObjectUrl);
@@ -382,12 +373,10 @@ function exitFullscreen() {
         console.warn('Error revoke fullscreen URL', e);
     }
 
-    // 清空图片 src（防止内存泄漏）
     elements.fullscreenImage.src = '';
 }
 
 function handleFullscreenKeydown(e) {
-    // 当全屏可见时，Esc 关闭，全屏下左右或空格切换图片
     const overlayVisible = elements.fullscreenOverlay.style.display === 'flex';
     if (!overlayVisible) return;
 
@@ -399,27 +388,36 @@ function handleFullscreenKeydown(e) {
 
     if (e.key === 'ArrowRight' || e.key === ' ') {
         e.preventDefault();
-        // 切换到下一张图片（相当于换一张）
         loadRandomImage();
         return;
     }
 
     if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        // 可实现回退到历史第一项（如果存在）
         if (state.history && state.history.length > 0) {
-            const first = state.history[0];
-            if (first && first.id) loadImageFromFavorite(first.id);
+            const prevImageId = (state.history[1] && state.history[1].id) || null;
+            if (prevImageId && prevImageId !== state.currentImageId) {
+                loadImageFromFavorite(prevImageId);
+            } else {
+                 showNotification('没有更早的浏览历史了', 'fas fa-info-circle');
+            }
+        } else {
+            showNotification('没有浏览历史可供回退', 'fas fa-info-circle');
         }
     }
 }
 
+
 // ----- 收藏 -----
 function toggleFavorite() {
-    if (!state.currentImageId) return;
-    const exist = state.favorites.find(f => f.id === state.currentImageId);
-    if (exist) {
-        state.favorites = state.favorites.filter(f => f.id !== state.currentImageId);
+    if (!state.currentImageId) {
+        showNotification('请先加载一张图片才能收藏', 'fas fa-info-circle');
+        return;
+    }
+
+    const existIndex = state.favorites.findIndex(f => f.id === state.currentImageId);
+    if (existIndex !== -1) {
+        state.favorites.splice(existIndex, 1);
         showNotification('已取消收藏', 'fas fa-heart-broken');
     } else {
         const item = {
@@ -465,11 +463,10 @@ async function loadFavorites() {
         if (rec && rec.blob) {
             try { thumbUrl = URL.createObjectURL(rec.blob); } catch (e) { thumbUrl = ''; }
         } else if (fav.url) {
-            // 不在缓存时可选择不主动下载（避免大量流量），这里用 placeholder
             thumbUrl = '';
         }
         return `
-            <div class="content-item" onclick="loadImageFromFavorite('${fav.id}')">
+            <div class="content-item" onclick="loadImageFromFavorite('${fav.id}');">
                 <img class="content-thumb" src="${thumbUrl}" alt="收藏图片" loading="lazy">
                 <div class="content-info">${fav.timestamp}</div>
                 <button class="remove-btn" onclick="event.stopPropagation(); removeFavorite('${fav.id}')">
@@ -483,50 +480,78 @@ async function loadFavorites() {
 }
 
 async function loadImageFromFavorite(id) {
-    const rec = await dbGetImage(id);
-    if (!rec || !rec.blob) {
-        showNotification('收藏图片未缓存，尝试远程加载...', 'fas fa-spinner');
-        const fav = state.favorites.find(f => f.id === id);
-        if (fav && fav.url) {
-            try {
-                const resp = await fetch(fav.url, { cache: 'no-store' });
-                if (!resp.ok) throw new Error('加载失败');
-                const blob = await resp.blob();
-                await dbPutImage({ id, blob, timestamp: Date.now(), sourceUrl: fav.url });
-                state.currentImageId = id;
-                state.currentImageUrl = fav.url;
-                localStorage.setItem('lastImageId', id);
-                displayImageObjectUrl(URL.createObjectURL(blob));
-                updateFavoriteButton();
-                showNotification('图片已从远程加载并缓存', 'fas fa-check-circle');
-                return;
-            } catch (e) {
-                showNotification('加载失败', 'fas fa-exclamation-triangle');
-                return;
+    showLoading();
+    elements.error.style.display = 'none';
+
+    try {
+        const rec = await dbGetImage(id);
+        if (!rec || !rec.blob) {
+            const fav = state.favorites.find(f => f.id === id);
+            if (!fav || !fav.url) {
+                throw new Error('收藏元数据丢失图片地址');
             }
+
+            // 收藏图片在缓存中不存在时，尝试通过 Image 对象重新加载
+            const image = new Image();
+            image.crossOrigin = 'anonymous';
+            image.src = fav.url;
+
+            await new Promise((resolve, reject) => {
+                image.onload = () => resolve();
+                image.onerror = (e) => reject(new Error('远程加载收藏图片失败，可能服务器拒绝访问或图片已失效。'));
+            });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+
+            const blob = await new Promise((resolve, reject) => {
+                canvas.toBlob(b => {
+                    if (b) resolve(b);
+                    else reject(new Error('无法从 Canvas 获取远程收藏图片的 Blob 数据。'));
+                }, 'image/jpeg');
+            });
+
+            await dbPutImage({ id, blob, timestamp: Date.now(), sourceUrl: fav.url });
+            showNotification('图片已从远程加载并缓存', 'fas fa-check-circle');
+            state.currentImageId = id;
+            state.currentImageUrl = fav.url;
         } else {
-            showNotification('收藏元数据不存在图片地址', 'fas fa-exclamation-triangle');
-            return;
+            state.currentImageId = id;
+            state.currentImageUrl = rec.sourceUrl || '';
         }
+
+        localStorage.setItem('lastImageId', state.currentImageId);
+        displayImageObjectUrl(URL.createObjectURL((await dbGetImage(state.currentImageId)).blob));
+        hideLoading();
+        updateFavoriteButton();
+        updateStats('views', { incrementDirect: false });
+        addToHistory({ id: state.currentImageId, url: state.currentImageUrl });
+    } catch (e) {
+        console.error('加载收藏图片失败', e);
+        showNotification(`加载收藏图片失败: ${e.message}`, 'fas fa-exclamation-triangle');
+        showError();
+        hideLoading();
     }
-    state.currentImageId = id;
-    state.currentImageUrl = rec.sourceUrl || '';
-    localStorage.setItem('lastImageId', id);
-    displayImageObjectUrl(URL.createObjectURL(rec.blob));
-    updateFavoriteButton();
-    updateStats('views', { incrementDirect: false });
 }
+
 
 function removeFavorite(id) {
     state.favorites = state.favorites.filter(f => f.id !== id);
     localStorage.setItem('favorites', JSON.stringify(state.favorites));
     loadFavorites();
     updateStats('favorites');
+    showNotification('已移除收藏', 'fas fa-times');
 }
 
 // ----- 分享 -----
 function showSharePanel() {
-    if (!state.currentImageId) return;
+    if (!state.currentImageId) {
+        showNotification('请先加载一张图片才能分享', 'fas fa-info-circle');
+        return;
+    }
     elements.sharePanel.classList.add('active');
     elements.sharePanel.setAttribute('aria-hidden', 'false');
 }
@@ -536,14 +561,16 @@ function hideSharePanel() {
     elements.sharePanel.setAttribute('aria-hidden', 'true');
 }
 
-function shareToWeibo() {
-    dbGetImage(state.currentImageId).then(rec => {
-        const text = encodeURIComponent('发现一张超美的图片！');
-        const url = encodeURIComponent(rec ? (rec.sourceUrl || '') : '');
-        window.open(`https://service.weibo.com/share/share.php?url=${url}&title=${text}`, '_blank');
+async function shareToWeibo() {
+    const shareUrl = state.currentImageUrl || '';
+    const text = encodeURIComponent('发现一张超美的图片！快来看看吧！');
+    if (shareUrl) {
+        window.open(`https://service.weibo.com/share/share.php?url=${encodeURIComponent(shareUrl)}&title=${text}`, '_blank');
         updateStats('shares');
         hideSharePanel();
-    });
+    } else {
+        showNotification('无法获取图片链接分享', 'fas fa-exclamation-triangle');
+    }
 }
 
 function shareToWeixin() {
@@ -552,22 +579,29 @@ function shareToWeixin() {
     hideSharePanel();
 }
 
-function shareToQQ() {
-    dbGetImage(state.currentImageId).then(rec => {
-        const text = encodeURIComponent('发现一张超美的图片！');
-        const url = encodeURIComponent(rec ? (rec.sourceUrl || '') : '');
-        window.open(`https://connect.qq.com/widget/shareqq/index.html?url=${url}&title=${text}`, '_blank');
+async function shareToQQ() {
+    const shareUrl = state.currentImageUrl || '';
+    const text = encodeURIComponent('发现一张超美的图片！快来看看吧！');
+    if (shareUrl) {
+        window.open(`https://connect.qq.com/widget/shareqq/index.html?url=${encodeURIComponent(shareUrl)}&title=${text}`, '_blank');
         updateStats('shares');
         hideSharePanel();
-    });
+    } else {
+        showNotification('无法获取图片链接分享', 'fas fa-exclamation-triangle');
+    }
 }
 
 function copyLink() {
     const url = state.currentImageUrl || '';
+    if (!url) {
+        showNotification('当前没有图片链接可复制', 'fas fa-exclamation-triangle');
+        return;
+    }
     navigator.clipboard.writeText(url).then(() => {
-        showNotification('链接已复制到剪贴板', 'fas fa-link');
+        showNotification('图片链接已复制到剪贴板', 'fas fa-link');
         updateStats('shares');
-    }).catch(() => {
+    }).catch(err => {
+        console.error('复制链接失败：', err);
         showNotification('复制失败，请手动复制', 'fas fa-exclamation-triangle');
     });
 }
@@ -590,6 +624,9 @@ function setupQualitySelector() {
             document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.quality = btn.getAttribute('data-quality');
+            localStorage.setItem('quality', state.quality);
+            showNotification(`图片质量已设置为：${btn.textContent}`, 'fas fa-check-circle');
+            //loadRandomImage(); // 如果需要立即应用，可以取消注释
         });
     });
 }
@@ -603,44 +640,62 @@ async function downloadImage() {
     try {
         const rec = await dbGetImage(state.currentImageId);
         if (!rec || !rec.blob) {
-            showNotification('当前图片未缓存，正在尝试缓存后下载...', 'fas fa-spinner');
-            if (rec && rec.sourceUrl) {
-                try {
-                    const resp = await fetch(rec.sourceUrl, { cache: 'no-store' });
-                    const blob = await resp.blob();
-                    await dbPutImage({ id: state.currentImageId, blob, timestamp: Date.now(), sourceUrl: rec.sourceUrl });
-                    await performBlobDownload(blob);
-                    updateStats('downloads');
-                    showNotification('下载成功', 'fas fa-download');
-                } catch (e) {
-                    showNotification('下载失败，请右键另存为', 'fas fa-exclamation-triangle');
-                }
-            } else {
-                showNotification('无可用资源下载', 'fas fa-exclamation-triangle');
+            showNotification('当前图片未缓存，正在尝试重新加载后下载...', 'fas fa-spinner');
+            const imgUrl = state.currentImageUrl; // 使用当前显示的图片URL尝试重新加载
+            if (!imgUrl) {
+                 throw new Error('当前图片URL未知，无法重新加载下载。');
             }
+
+            const image = new Image();
+            image.crossOrigin = 'anonymous';
+            image.src = imgUrl;
+
+            await new Promise((resolve, reject) => {
+                image.onload = () => resolve();
+                image.onerror = (e) => reject(new Error('重新加载图片失败，无法进行下载。'));
+            });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+
+            const blob = await new Promise((resolve, reject) => {
+                canvas.toBlob(b => {
+                    if (b) resolve(b);
+                    else reject(new Error('无法从 Canvas 获取重新加载图片的 Blob 数据。'));
+                }, 'image/jpeg');
+            });
+
+            await dbPutImage({ id: state.currentImageId, blob, timestamp: Date.now(), sourceUrl: imgUrl });
+            await performBlobDownload(blob, state.currentImageId);
+            updateStats('downloads');
+            showNotification('下载成功', 'fas fa-download');
+
             return;
         }
-        await performBlobDownload(rec.blob);
+        await performBlobDownload(rec.blob, state.currentImageId);
         updateStats('downloads');
         showNotification('下载成功', 'fas fa-download');
     } catch (e) {
-        console.error(e);
-        showNotification('下载失败，请右键另存为', 'fas fa-exclamation-triangle');
+        console.error('下载图片失败', e);
+        showNotification(`下载失败: ${e.message}。请尝试右键另存为`, 'fas fa-exclamation-triangle');
     }
 }
 
-function performBlobDownload(blob) {
+function performBlobDownload(blob, imageId) {
     return new Promise((resolve) => {
         const a = document.createElement('a');
         const url = URL.createObjectURL(blob);
         a.href = url;
-        const filename = `美女图片_${state.currentImageId}.jpg`;
+        const filename = `美女图片_${imageId}.jpg`;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
             document.body.removeChild(a);
-            try { URL.revokeObjectURL(url); } catch (e) {}
+            try { URL.revokeObjectURL(url); } catch (e) { /* silent error */ }
             resolve();
         }, 150);
     });
@@ -652,13 +707,20 @@ function addToHistory(meta = null) {
         meta = { id: state.currentImageId, url: state.currentImageUrl };
     }
     if (!meta.id) return;
-    if (state.history.length > 0 && state.history[0].id === meta.id) return;
-    const historyItem = {
-        id: meta.id,
-        url: meta.url,
-        timestamp: new Date().toLocaleString()
-    };
-    state.history.unshift(historyItem);
+
+    const existingIndex = state.history.findIndex(item => item.id === meta.id);
+    if (existingIndex !== -1) {
+        const [existingItem] = state.history.splice(existingIndex, 1);
+        state.history.unshift(existingItem);
+    } else {
+        const historyItem = {
+            id: meta.id,
+            url: meta.url,
+            timestamp: new Date().toLocaleString()
+        };
+        state.history.unshift(historyItem);
+    }
+
     state.history = state.history.slice(0, 50);
     localStorage.setItem('history', JSON.stringify(state.history));
     loadHistory();
@@ -682,7 +744,7 @@ async function loadHistory() {
             try { thumbUrl = URL.createObjectURL(rec.blob); } catch (e) { thumbUrl = ''; }
         }
         return `
-            <div class="content-item" onclick="loadImageFromFavorite('${item.id}')">
+            <div class="content-item" onclick="loadImageFromFavorite('${item.id}');">
                 <img class="content-thumb" src="${thumbUrl}" alt="历史图片" loading="lazy">
                 <div class="content-info">${item.timestamp}</div>
             </div>
@@ -739,13 +801,15 @@ function clearFavorites() {
 }
 
 async function clearCache() {
-    if (!confirm('确认清空缓存？清空后本地存储的图片将被删除（收藏项仍保留元数据，但缩略将不可用）。')) return;
+    if (!confirm('确认清空缓存？清空后本地存储的图片将被删除（收藏项和历史记录仍保留元数据，但缩略图将不可用）。')) return;
     await dbClearAllImages();
     state.currentImageId = '';
     state.currentImageUrl = '';
     localStorage.removeItem('lastImageId');
+    elements.image.src = '';
+    elements.image.style.display = 'none';
+    showNotification('缓存已清空，正在加载新图片', 'fas fa-trash');
     loadRandomImage();
-    showNotification('缓存已清空', 'fas fa-trash');
 }
 
 function clearStats() {
@@ -782,20 +846,24 @@ document.addEventListener('keydown', function (e) {
             toggleTheme();
             break;
         case 'Escape':
-            // 如果 sharePanel 打开则关闭，否则如在全屏中也会由 fullscreen 键处理器处理
-            if (elements.sharePanel.classList.contains('active')) {
+            if (elements.sharePanel && elements.sharePanel.classList.contains('active')) {
                 hideSharePanel();
             }
             break;
     }
 });
 
-// 点击页面时，如果点击在分享面板外则隐藏（但避免误关）
 document.addEventListener('click', function (e) {
-    if (elements.sharePanel.classList.contains('active') && !elements.sharePanel.contains(e.target) && !e.target.closest('.share-btn') && !e.target.closest('#shareBtn')) {
+    if (
+        elements.sharePanel && elements.sharePanel.classList.contains('active') &&
+        !elements.sharePanel.contains(e.target) &&
+        !e.target.closest('.share-btn') &&
+        !e.target.closest('#shareBtn')
+    ) {
         hideSharePanel();
     }
 });
+
 
 // ----- 页面加载后初始化 -----
 window.addEventListener('load', init);
