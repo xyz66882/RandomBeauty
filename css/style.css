@@ -1,3 +1,5 @@
+/* style.css - 终极修复版 v2 */
+
 :root {
     --bg-primary: #0a0a0a;
     --bg-secondary: #1a1a1a;
@@ -118,6 +120,27 @@ body::before {
     display: flex;
     align-items: center;
     gap: 20px;
+}
+
+.preload-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    margin-right: 15px;
+    transition: all 0.3s ease;
+}
+
+.preload-indicator i {
+    font-size: 16px;
+    color: var(--accent);
 }
 
 .theme-toggle-btn {
@@ -241,7 +264,7 @@ body::before {
 #randomImage {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 24px;
     transition: all 0.5s ease;
     user-select: none;
@@ -331,6 +354,16 @@ body::before {
 
 .btn:active {
     transform: translateY(-1px);
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+}
+.btn:disabled::before {
+    content: none; 
 }
 
 .btn-secondary {
@@ -437,10 +470,10 @@ body::before {
     padding: 12px;
     margin-bottom: 8px;
     background: var(--bg-secondary);
+    border: 1px solid var(--border);
     border-radius: 12px;
     cursor: pointer;
     transition: all 0.12s ease;
-    border: 1px solid var(--border);
 }
 
 .content-item:hover {
@@ -507,17 +540,30 @@ body::before {
     transform: translateY(-2px);
 }
 
+.quality-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    transform: none;
+}
+
 .loading {
-    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     text-align: center;
     font-size: 18px;
     color: var(--text-secondary);
     animation: loadingPulse 2s infinite;
+    z-index: 2;
+    display: none;
 }
 
 @keyframes loadingPulse {
-    0%, 100% { opacity: 0.5; transform: scale(1); }
-    50% { opacity: 1; transform: scale(1.05); }
+    0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
+    50% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
 }
 
 .error-msg {
@@ -537,7 +583,6 @@ body::before {
     75% { transform: translateX(5px); }
 }
 
-/* 全屏覆盖样式：点击遮罩或关闭按钮或按 Esc 可退出 */
 .fullscreen-overlay {
     position: fixed;
     inset: 0;
@@ -687,7 +732,7 @@ body::before {
     backdrop-filter: var(--blur);
     border: 1px solid var(--border);
     color: var(--text-primary);
-    padding: 16px 24px;
+    padding: 12px 18px;
     border-radius: 16px;
     box-shadow: var(--shadow);
     z-index: 1000;
@@ -697,13 +742,23 @@ body::before {
     align-items: center;
     gap: 12px;
     font-weight: 500;
+    pointer-events: none;
 }
 
 .notification.show {
     transform: translateX(0);
 }
 
-/* 新增管理选项布局 */
+.notification .notification-thumb {
+    width: 50px;
+    height: 50px;
+    border-radius: 8px;
+    object-fit: cover;
+    margin-left: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    flex-shrink: 0;
+}
+
 .management-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -733,18 +788,34 @@ body::before {
     .navbar {
         padding: 0 20px;
     }
-
+    .nav-actions {
+        gap: 10px;
+    }
+    .preload-indicator {
+        margin-right: 5px;
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+    .preload-indicator i {
+        font-size: 14px;
+    }
     .container {
         padding: 100px 20px 20px;
     }
-
     .sidebar {
         grid-template-columns: 1fr;
         display: flex;
     }
-
     .controls {
         grid-template-columns: 1fr;
+    }
+    .notification {
+        top: 20px;
+        right: 20px;
+        left: 20px;
+        max-width: unset;
+        transform: translateX(calc(100% + 40px));
+        justify-content: center;
     }
 }
 
@@ -752,11 +823,9 @@ body::before {
     .hero-title {
         font-size: 2.5rem;
     }
-
     .image-card {
         padding: 20px;
     }
-
     .sidebar-card {
         padding: 16px;
     }
